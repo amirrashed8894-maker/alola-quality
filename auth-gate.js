@@ -308,7 +308,7 @@
           ra.data.devices.map(function (d) {
             var dt = d.at ? new Date(d.at).toLocaleDateString('en-GB', { timeZone: 'Africa/Cairo' }) : '';
             return '<div class="row"><span><b>' + String(d.label || 'جهاز').replace(/[<>&]/g, '') + '</b>' + (d.current ? ' (الجهاز ده)' : '') + '<br><small style="color:#666">مربوط ' + dt + '</small></span>' +
-              (d.current ? '' : '<button type="button" data-n="' + d.n + '">فصل</button>') + '</div>';
+              '<button type="button" data-n="' + d.n + '"' + (d.current ? ' data-self="1"' : '') + '>فصل</button></div>';
           }).join('') + '<div style="font-weight:700;margin:12px 0 4px">حسابات الموظفين</div>';
       }
       var r = await api('/api/admin/devices?app=' + encodeURIComponent(APP));
@@ -325,11 +325,13 @@
       }).join('');
       list.querySelectorAll('button[data-n]').forEach(function (btn) {
         btn.onclick = async function () {
+          if (btn.getAttribute('data-self') && !confirm('فصل الجهاز ده؟ هتحتاج كود الربط عشان تدخل تاني منه')) return;
           msg.textContent = '';
           btn.disabled = true;
           try {
             var rr = await api('/api/admin/amir-unpair?app=' + encodeURIComponent(APP), { method: 'POST', body: { n: Number(btn.getAttribute('data-n')), app: APP } });
             msg.textContent = (rr.data && (rr.data.message || rr.data.error)) || 'تم';
+            if (rr.data && rr.data.ok && rr.data.self) { try { localStorage.removeItem(PAIRED_KEY); } catch (e3) {} clearSession(); setTimeout(function () { location.reload(); }, 1200); return; }
             openAdmin();
           } catch (e) {
             msg.textContent = 'فشل الفصل';

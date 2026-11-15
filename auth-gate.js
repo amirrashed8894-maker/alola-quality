@@ -1,4 +1,4 @@
-/*! Alola shared login gate v6 — talks to alola-maggi-auth */
+/*! Alola shared login gate v7 — talks to alola-maggi-auth */
 (function () {
   'use strict';
   var API = (window.ALOLA_AUTH_API || 'https://alola-maggi-auth.onrender.com').replace(/\/$/, '');
@@ -84,6 +84,7 @@
       '#alola-auth-overlay button.login:disabled{opacity:.6;cursor:wait}',
       '#alola-auth-overlay button.amir{width:100%;margin-top:10px;min-height:48px;border:1.5px solid #1d4d2b;border-radius:12px;background:#f4f8f4;color:#1d4d2b;font:inherit;font-size:16px;font-weight:700;cursor:pointer}',
       '#alola-auth-overlay button.amir:disabled{opacity:.6;cursor:wait}',
+      '#alola-auth-overlay #alola-auth-code{text-align:center;letter-spacing:3px;font-size:20px}',
       '#alola-auth-overlay .err{min-height:20px;margin-top:10px;color:#b42318;font-size:13.5px;text-align:center;line-height:1.4}',
       '#alola-auth-overlay .hint{margin-top:12px;font-size:12px;color:#777;text-align:center;line-height:1.5}',
       '#alola-auth-bar{position:fixed;top:0;left:0;z-index:2147482990;display:flex;gap:6px;padding:4px;pointer-events:none}',
@@ -123,7 +124,7 @@
     var go = function () { doLogin(); };
     document.getElementById('alola-auth-go').addEventListener('click', go);
     var amirBtn = document.getElementById('alola-auth-amir');
-    if (amirBtn) amirBtn.addEventListener('click', function () { doAmirLogin(); });
+    if (amirBtn) amirBtn.addEventListener('click', function () { doAmirLogin(false); });
     document.getElementById('alola-auth-pass').addEventListener('keydown', function (e) {
       if (e.key === 'Enter') go();
     });
@@ -203,13 +204,46 @@
     }
   }
 
-  async function doAmirLogin() {
+  var PAIRED_KEY = 'alola_amir_paired';
+  function devLabel() {
+    var ua = navigator.userAgent || '';
+    if (/iPhone/.test(ua)) return 'iPhone';
+    if (/iPad/.test(ua)) return 'iPad';
+    if (/Android/.test(ua)) return 'Android';
+    if (/Macintosh|Mac OS X/.test(ua)) return 'Mac';
+    if (/Windows/.test(ua)) return 'Windows';
+    return 'جهاز';
+  }
+  function showPairBox() {
+    var box = document.getElementById('alola-auth-pairbox');
+    if (box) { box.style.display = 'block'; var i0 = document.getElementById('alola-auth-code'); if (i0) i0.focus(); return; }
+    var amirBtn = document.getElementById('alola-auth-amir');
+    if (!amirBtn) return;
+    box = document.createElement('div');
+    box.id = 'alola-auth-pairbox';
+    box.innerHTML = '<label>كود ربط جهاز أمير (أول مرة بس على الجهاز ده)</label>' +
+      '<input id="alola-auth-code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" placeholder="8 أرقام">' +
+      '<button class="amir" id="alola-auth-pair" type="button">ربط الجهاز والدخول</button>';
+    amirBtn.parentNode.insertBefore(box, amirBtn.nextSibling);
+    amirBtn.style.display = 'none';
+    document.getElementById('alola-auth-pair').addEventListener('click', function () { doAmirLogin(true); });
+    document.getElementById('alola-auth-code').addEventListener('keydown', function (e) { if (e.key === 'Enter') doAmirLogin(true); });
+    setTimeout(function () { var i = document.getElementById('alola-auth-code'); if (i) i.focus(); }, 50);
+  }
+
+  async function doAmirLogin(withCode) {
     var eEl = document.getElementById('alola-auth-err');
-    var bEl = document.getElementById('alola-auth-amir');
+    var bEl = document.getElementById(withCode ? 'alola-auth-pair' : 'alola-auth-amir');
+    var bTxt = bEl ? bEl.textContent : '';
     if (eEl) eEl.textContent = '';
+    var body = { deviceId: deviceId(), app: APP, label: devLabel() };
+    if (withCode) {
+      var cEl = document.getElementById('alola-auth-code');
+      body.code = String(cEl && cEl.value || '').replace(/\D/g, '');
+      if (body.code.length < 8) { if (eEl) eEl.textContent = 'اكتب كود الربط (8 أرقام)'; return; }
+    }
     if (bEl) { bEl.disabled = true; bEl.textContent = 'جاري الدخول…'; }
     try {
-      var body = { deviceId: deviceId(), app: APP };
       var r;
       try {
         r = await api('/api/login-amir', { method: 'POST', body: body, timeout: 60000 });
@@ -219,16 +253,19 @@
         if (eEl) eEl.textContent = '';
       }
       if (!r.data || !r.data.ok) {
+        var code = r.data && r.data.code;
+        if (code === 'PAIR_REQUIRED' || code === 'PAIR_BAD') showPairBox();
         if (eEl) eEl.textContent = (r.data && r.data.error) || 'فشل الدخول';
         return;
       }
       setSession(r.data.token, r.data.user);
+      try { localStorage.setItem(PAIRED_KEY, '1'); } catch (e) {}
       hideOverlay();
       mountBar(r.data.user);
     } catch (e) {
       if (eEl) eEl.textContent = 'تعذر الاتصال بخادم الدخول. حاول مرة أخرى بعد لحظات.';
     } finally {
-      if (bEl) { bEl.disabled = false; bEl.textContent = 'دخول أمير'; }
+      if (bEl) { bEl.disabled = false; bEl.textContent = bTxt; }
     }
   }
 
@@ -264,24 +301,48 @@
     msg.textContent = '';
     list.textContent = 'جاري التحميل…';
     try {
-      var r = await api('/api/admin/devices');
+      var ra = await api('/api/admin/amir-devices?app=' + encodeURIComponent(APP));
+      var amirHtml = '';
+      if (ra.data && ra.data.ok && ra.data.devices && ra.data.devices.length) {
+        amirHtml = '<div style="font-weight:700;margin:4px 0">أجهزة أمير في البرنامج ده (حد أقصى ' + (ra.data.max || 2) + ')</div>' +
+          ra.data.devices.map(function (d) {
+            var dt = d.at ? new Date(d.at).toLocaleDateString('en-GB', { timeZone: 'Africa/Cairo' }) : '';
+            return '<div class="row"><span><b>' + String(d.label || 'جهاز').replace(/[<>&]/g, '') + '</b>' + (d.current ? ' (الجهاز ده)' : '') + '<br><small style="color:#666">مربوط ' + dt + '</small></span>' +
+              (d.current ? '' : '<button type="button" data-n="' + d.n + '">فصل</button>') + '</div>';
+          }).join('') + '<div style="font-weight:700;margin:12px 0 4px">حسابات الموظفين</div>';
+      }
+      var r = await api('/api/admin/devices?app=' + encodeURIComponent(APP));
       if (!r.data || !r.data.ok) {
         list.textContent = (r.data && r.data.error) || 'تعذر التحميل';
         return;
       }
       var devices = r.data.devices || {};
       var names = Object.keys(devices);
-      if (!names.length) { list.textContent = 'لا يوجد حسابات مربوطة'; return; }
-      list.innerHTML = names.map(function (u) {
+      if (!names.length) { list.innerHTML = amirHtml + 'لا يوجد حسابات مربوطة'; return; }
+      list.innerHTML = amirHtml + names.map(function (u) {
         var bound = devices[u] ? 'مربوط' : 'غير مربوط';
         return '<div class="row"><span><b>' + u + '</b><br><small style="color:#666">' + bound + '</small></span><button type="button" data-u="' + u + '">فك الربط</button></div>';
       }).join('');
+      list.querySelectorAll('button[data-n]').forEach(function (btn) {
+        btn.onclick = async function () {
+          msg.textContent = '';
+          btn.disabled = true;
+          try {
+            var rr = await api('/api/admin/amir-unpair?app=' + encodeURIComponent(APP), { method: 'POST', body: { n: Number(btn.getAttribute('data-n')), app: APP } });
+            msg.textContent = (rr.data && (rr.data.message || rr.data.error)) || 'تم';
+            openAdmin();
+          } catch (e) {
+            msg.textContent = 'فشل الفصل';
+            btn.disabled = false;
+          }
+        };
+      });
       list.querySelectorAll('button[data-u]').forEach(function (btn) {
         btn.onclick = async function () {
           msg.textContent = '';
           btn.disabled = true;
           try {
-            var rr = await api('/api/admin/reset-device', { method: 'POST', body: { username: btn.getAttribute('data-u') } });
+            var rr = await api('/api/admin/reset-device?app=' + encodeURIComponent(APP), { method: 'POST', body: { username: btn.getAttribute('data-u') } });
             msg.textContent = (rr.data && (rr.data.message || rr.data.error)) || 'تم';
             openAdmin();
           } catch (e) {
@@ -306,12 +367,13 @@
     try {
       var r = await api('/api/me?app=' + encodeURIComponent(APP), { timeout: 60000 });
       if (r.data && r.data.ok) {
-        setSession(token, r.data.user);
+        setSession(r.data.token || token, r.data.user);
         hideOverlay();
         mountBar(r.data.user);
         return;
       }
       clearSession();
+      if (r.data && r.data.code === 'AMIR_DEVICE') { try { localStorage.removeItem(PAIRED_KEY); } catch (e) {} }
       showOverlay();
       if (r.data && r.data.error) {
         var el = document.getElementById('alola-auth-err');
@@ -320,7 +382,11 @@
     } catch (e) {
       // Auth server cold start / offline: keep session optimistically if token present & not expired-looking
       var user = getUser();
-      if (user && user.username && appAllowed(user)) {
+      var pairedOk = true;
+      if (user && user.username === 'amir' && AMIR_APPS.indexOf(APP) !== -1) {
+        try { pairedOk = localStorage.getItem(PAIRED_KEY) === '1'; } catch (e2) { pairedOk = false; }
+      }
+      if (user && user.username && appAllowed(user) && pairedOk) {
         hideOverlay();
         mountBar(user);
         return;

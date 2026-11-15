@@ -1,4 +1,4 @@
-/*! Alola/Maggi shared login gate — talks to alola-maggi-auth */
+/*! Alola shared login gate v6 — talks to alola-maggi-auth */
 (function () {
   'use strict';
   var API = (window.ALOLA_AUTH_API || 'https://alola-maggi-auth.onrender.com').replace(/\/$/, '');
@@ -9,10 +9,21 @@
     if (window.ALOLA_AUTH_APP) return String(window.ALOLA_AUTH_APP);
     var h = String(location.hostname || '');
     if (h.indexOf('maggi-packing-list') !== -1) return 'maggi';
+    if (h.indexOf('alola-packing-list') !== -1) return 'packing';
+    if (h.indexOf('alola-receiving') !== -1) return 'receiving';
     if (h.indexOf('alola-production') !== -1) return 'production';
     if (h.indexOf('alola-quality') !== -1) return 'quality';
     return '';
   })();
+  var AMIR_APPS = ['packing', 'production', 'quality', 'receiving'];
+  var APP_TITLES = { production: 'الإنتاج اليومي — العلا', quality: 'الجودة — العلا', receiving: 'استلام الخام — العلا', packing: 'باكينج ليست العلا', maggi: 'ماجي', cost: 'بيان التكلفة — العلا' };
+  // wake the free auth server early (cold start) while the user is typing
+  var wakeP = null;
+  function wake() {
+    if (wakeP) return wakeP;
+    try { wakeP = fetch(API + '/health', { cache: 'no-store' }).catch(function () { wakeP = null; }); } catch (e) { wakeP = null; }
+    return wakeP;
+  }
   function appAllowed(user) {
     return !!(user && Array.isArray(user.apps) && user.apps.indexOf(APP) !== -1);
   }
@@ -71,6 +82,8 @@
       '#alola-auth-overlay input:focus{outline:none;border-color:#4a7c50;box-shadow:0 0 0 3px #4a7c5033}',
       '#alola-auth-overlay button.login{width:100%;margin-top:14px;min-height:48px;border:0;border-radius:12px;background:#1d4d2b;color:#fff;font:inherit;font-size:16px;font-weight:700;cursor:pointer}',
       '#alola-auth-overlay button.login:disabled{opacity:.6;cursor:wait}',
+      '#alola-auth-overlay button.amir{width:100%;margin-top:10px;min-height:48px;border:1.5px solid #1d4d2b;border-radius:12px;background:#f4f8f4;color:#1d4d2b;font:inherit;font-size:16px;font-weight:700;cursor:pointer}',
+      '#alola-auth-overlay button.amir:disabled{opacity:.6;cursor:wait}',
       '#alola-auth-overlay .err{min-height:20px;margin-top:10px;color:#b42318;font-size:13.5px;text-align:center;line-height:1.4}',
       '#alola-auth-overlay .hint{margin-top:12px;font-size:12px;color:#777;text-align:center;line-height:1.5}',
       '#alola-auth-bar{position:fixed;top:0;left:0;z-index:2147482990;display:flex;gap:6px;padding:4px;pointer-events:none}',
@@ -95,19 +108,22 @@
     el.innerHTML = [
       '<div class="box">',
       '<h2>تسجيل الدخول</h2>',
-      '<p class="sub">برامج العلا وماجي — أدخل اليوزر والباسورد</p>',
+      '<p class="sub">' + (APP_TITLES[APP] || 'برامج العلا') + ' — أدخل اليوزر والباسورد</p>',
       '<label>اليوزر</label>',
       '<input id="alola-auth-user" autocomplete="username" autocapitalize="off" spellcheck="false">',
       '<label>الباسورد</label>',
       '<input id="alola-auth-pass" type="password" autocomplete="current-password">',
       '<button class="login" id="alola-auth-go" type="button">دخول</button>',
+      AMIR_APPS.indexOf(APP) !== -1 ? '<button class="amir" id="alola-auth-amir" type="button">دخول أمير</button>' : '',
       '<div class="err" id="alola-auth-err"></div>',
-      '<div class="hint">غير حساب أمير: الحساب مربوط بتليفون واحد فقط</div>',
+      '<div class="hint">كل حساب يشتغل على جهاز واحد فقط (ما عدا أمير)</div>',
       '</div>'
     ].join('');
     document.body.appendChild(el);
     var go = function () { doLogin(); };
     document.getElementById('alola-auth-go').addEventListener('click', go);
+    var amirBtn = document.getElementById('alola-auth-amir');
+    if (amirBtn) amirBtn.addEventListener('click', function () { doAmirLogin(); });
     document.getElementById('alola-auth-pass').addEventListener('keydown', function (e) {
       if (e.key === 'Enter') go();
     });
@@ -163,11 +179,15 @@
     if (eEl) eEl.textContent = '';
     if (bEl) { bEl.disabled = true; bEl.textContent = 'جاري الدخول…'; }
     try {
-      var r = await api('/api/login', {
-        method: 'POST',
-        body: { username: username, password: password, deviceId: deviceId(), app: APP },
-        timeout: 60000
-      });
+      var body = { username: username, password: password, deviceId: deviceId(), app: APP };
+      var r;
+      try {
+        r = await api('/api/login', { method: 'POST', body: body, timeout: 60000 });
+      } catch (e1) {
+        if (eEl) eEl.textContent = 'السيرفر بيصحى… لحظات';
+        r = await api('/api/login', { method: 'POST', body: body, timeout: 90000 });
+        if (eEl) eEl.textContent = '';
+      }
       if (!r.data || !r.data.ok) {
         if (r.status === 403 && r.data && r.data.code === 'APP_DENIED') clearSession();
         if (eEl) eEl.textContent = (r.data && r.data.error) || 'فشل الدخول';
@@ -180,6 +200,35 @@
       if (eEl) eEl.textContent = 'تعذر الاتصال بخادم الدخول. حاول مرة أخرى بعد لحظات.';
     } finally {
       if (bEl) { bEl.disabled = false; bEl.textContent = 'دخول'; }
+    }
+  }
+
+  async function doAmirLogin() {
+    var eEl = document.getElementById('alola-auth-err');
+    var bEl = document.getElementById('alola-auth-amir');
+    if (eEl) eEl.textContent = '';
+    if (bEl) { bEl.disabled = true; bEl.textContent = 'جاري الدخول…'; }
+    try {
+      var body = { deviceId: deviceId(), app: APP };
+      var r;
+      try {
+        r = await api('/api/login-amir', { method: 'POST', body: body, timeout: 60000 });
+      } catch (e1) {
+        if (eEl) eEl.textContent = 'السيرفر بيصحى… لحظات';
+        r = await api('/api/login-amir', { method: 'POST', body: body, timeout: 90000 });
+        if (eEl) eEl.textContent = '';
+      }
+      if (!r.data || !r.data.ok) {
+        if (eEl) eEl.textContent = (r.data && r.data.error) || 'فشل الدخول';
+        return;
+      }
+      setSession(r.data.token, r.data.user);
+      hideOverlay();
+      mountBar(r.data.user);
+    } catch (e) {
+      if (eEl) eEl.textContent = 'تعذر الاتصال بخادم الدخول. حاول مرة أخرى بعد لحظات.';
+    } finally {
+      if (bEl) { bEl.disabled = false; bEl.textContent = 'دخول أمير'; }
     }
   }
 
@@ -248,6 +297,7 @@
 
   async function boot() {
     injectStyles();
+    wake();
     var token = getToken();
     if (!token) {
       showOverlay();

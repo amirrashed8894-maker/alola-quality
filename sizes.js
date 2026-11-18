@@ -1,11 +1,11 @@
-/* مقاسات الموالح — العلا · جدول مشترك لبرامج الاستلام والإنتاج والجودة · v1 (18/11/2026)
+/* مقاسات الموالح — العلا · جدول مشترك لبرامج الاستلام والإنتاج والجودة · v2 (18/11/2026)
    الجدول: Oranges and Lemons size in Egypt (العدد في كرتونة 15 ك ← القطر بالمم).
    أي قطر لمقاس مش في الجدول أو لعبوة مش 14/15 ك/جامبو بيتحسب «تقريبي»:
    العدد المكافئ لـ 15 ك = العدد × 15 ÷ وزن العبوة ← أقرب صف في الجدول. وزن الحبة التقريبي = وزن العبوة ÷ العدد. */
 (function(G){'use strict';
 const TABLE=[[36,92,95],[40,88,92],[48,84,88],[56,81,84],[64,77,81],[72,73,77],[80,69,73],[88,65,69],[100,61,65],[113,57,61],[125,53,57],[138,49,53],[150,45,49],[162,41,45],[189,37,41],[216,33,37]];
 const OR15=[36,48,56,64,72,80,88,100,113,125],LEM=[72,88,100,113,125,138,150,162,216];
-const GROUPS={orange:{name:'برتقال',vars:['أبو سرة','صيفي']},lemon:{name:'ليمون',vars:['ليمون']},mand:{name:'أفندي',vars:['كلمنتينا','فريمونت','موركيت كيني','موركيت إسباني']}};
+const GROUPS={orange:{name:'برتقال',vars:['أبو سرة','صيفي','بلدي']},lemon:{name:'ليمون',vars:['ليمون']},mand:{name:'أفندي',vars:['كلمنتينا','فريمونت','موركيت كيني','موركيت إسباني']}};
 const VARIETIES=[].concat(GROUPS.orange.vars,GROUPS.lemon.vars,GROUPS.mand.vars);
 const PACKS=[
  {id:'open7',g:'orange',label:'كرتون أوبن توب 7 ك',carton:'أوبن توب 7 ك',pk:'كرتون',kg:7,sizes:[20,24,28,32]},
@@ -34,6 +34,8 @@ function packOf(g,carton,pk){const c=String(carton||'');if(!g)return null;if(PK[
  if(g==='mand'){return PACKS.find(p=>p.g==='mand'&&p.kg===k)||null}return null}
 /* المقاسات المسموحة: [] = لسه ما اتحددش الصنف/العبوة · null = إدخال حر (الأفندي: المهندس يكتب العدد) */
 function sizesFor(g,pack){if(!g)return [];if(g==='mand')return null;if(!pack)return [];return pack.sizes.map(String)}
+/* تصدير: مقاسات العبوة فقط («أكبر من/أصغر من» خارج). البرتقال: 125 في 14/15 ك والجامبو خارج التصدير (بيقف عند 113). الليمون: كل مقاسات العبوة. */
+function isExport(g,pack,count){const k=String(count||'');if(!g||!pack||!pack.sizes)return false;if(!pack.sizes.map(String).includes(k))return false;if(g==='orange'&&num(k)>113)return false;return true}
 function nearest(eq){let b=TABLE[0];TABLE.forEach(r=>{if(Math.abs(r[0]-eq)<Math.abs(b[0]-eq))b=r});return b}
 /* info: القطر (من الجدول أو تقريبي) + وزن الحبة التقريبي.  wKg = وزن العبوة الفعلي لو متسجل (اختياري) */
 function info(g,pack,count,wKg){const n=num(count);if(!(n>0)||!g)return null;const kg=pack&&pack.kg||0;const net=num(wKg)>0?num(wKg):kg;
@@ -56,5 +58,5 @@ function band(lo,hi,crateKg){lo=num(lo);hi=num(hi);const inf=!(hi>0)||hi>=1e8;co
  const o={dia,approx:true,gw:0,cnt:''};const k=num(crateKg);if(k>0){const c1=!inf?Math.round(k*1000/hi):0,c2=lo>0?Math.round(k*1000/lo):0;o.cnt=c1&&c2?c1+'–'+c2:c1?'أكثر من '+c1:c2?'أقل من '+c2:''}return o}
 function bandText(o,crateKg){if(!o)return '';let s=o.dia?'قطر ≈ '+o.dia+' مم':'';if(o.cnt)s+=(s?' · ':'')+'≈ '+o.cnt+' حبة/صندوق '+num(crateKg)+' ك';return s}
 const NOTE='القطر من جدول مقاسات البرتقال والليمون في مصر (عدد الحبات في كرتونة 15 ك). «تقريبي» = عبوة غير 14/15 ك أو أفندي: العدد × 15 ÷ وزن العبوة ← أقرب صف. وزن الحبة = وزن العبوة ÷ العدد.';
-G.ALS={VER:1,compact,band,bandText,TABLE,GROUPS,VARIETIES,PACKS,PK,groupOf,packsFor,packOf,sizesFor,info,infoByWeight,text,nearest,kgOfText,NOTE};
+G.ALS={VER:2,compact,band,bandText,TABLE,GROUPS,VARIETIES,PACKS,PK,groupOf,packsFor,packOf,sizesFor,isExport,info,infoByWeight,text,nearest,kgOfText,NOTE};
 })(typeof window!=='undefined'?window:globalThis);

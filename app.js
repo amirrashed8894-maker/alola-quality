@@ -102,7 +102,7 @@ const b64=buf=>{let s='';const u=new Uint8Array(buf);for(let i=0;i<u.length;i+=3
 const unb64=s=>{const b=atob(s),u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u};
 async function sha(buf){return [...new Uint8Array(await crypto.subtle.digest('SHA-256',buf))].map(x=>x.toString(16).padStart(2,'0')).join('')}
 async function issue(){const rows=QC.used(D);if(!rows.length)return alert('مفيش ولا كرتونة متسجلة');const ms=QC.missing({rows});if(ms.length)return alert('مينفعش يطلع التقرير قبل ما تكمّل:\n\n'+ms.join('\n'));const dv=QC.diversity({rows});if(dv.length&&!confirm('تنبيه:\n'+dv.join('\n')+'\n\nتكمّل وتطلع التقرير؟'))return;
- busy('جاري عمل التقرير PDF…');try{const rep=JSON.parse(JSON.stringify(D));rep.code=QC.code();rep.createdAt=new Date().toISOString();rep.rows=QC.used(rep);rep.rows.forEach(r=>{if(r.b&&!QC.L.brand.includes(r.b)&&!XL.brand.includes(r.b))XL.brand.push(r.b)});saveXL();
+ busy('جاري عمل التقرير PDF…');try{const rep=JSON.parse(JSON.stringify(D));rep.code=QC.code(new Date(),rep.date);rep.createdAt=new Date().toISOString();rep.rows=QC.used(rep);rep.rows.forEach(r=>{if(r.b&&!QC.L.brand.includes(r.b)&&!XL.brand.includes(r.b))XL.brand.push(r.b)});saveXL();
   const pdf=await makePdf(rep);const file={fmt:QC.FMT,v:QC.VER,app:'alola-quality-pwa',code:rep.code,createdAt:rep.createdAt,report:rep,pdf:b64(pdf),pdfSha256:await sha(pdf)};
   await tx('reports','readwrite',s=>s.put(file));const oldId=D.id;D=blank(D);await saveDraft();await dropDraft(oldId);window._restored=false;busy('');T=1;render();showDone(file)}catch(x){busy('');alert('حصلت مشكلة: '+x.message)}}
 const names=f=>({pdf:`${f.code}.pdf`,json:`${f.code}.alola-qc.json`});

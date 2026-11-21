@@ -104,15 +104,18 @@ async function sha(buf){return [...new Uint8Array(await crypto.subtle.digest('SH
 async function issue(){const rows=QC.used(D);if(!rows.length)return alert('مفيش ولا كرتونة متسجلة');const ms=QC.missing({rows});if(ms.length)return alert('مينفعش يطلع التقرير قبل ما تكمّل:\n\n'+ms.join('\n'));const dv=QC.diversity({rows});if(dv.length&&!confirm('تنبيه:\n'+dv.join('\n')+'\n\nتكمّل وتطلع التقرير؟'))return;
  busy('جاري عمل التقرير PDF…');try{const rep=JSON.parse(JSON.stringify(D));rep.code=QC.code(new Date(),rep.date);rep.createdAt=new Date().toISOString();rep.rows=QC.used(rep);rep.rows.forEach(r=>{if(r.b&&!QC.L.brand.includes(r.b)&&!XL.brand.includes(r.b))XL.brand.push(r.b)});saveXL();
   const pdf=await makePdf(rep);const file={fmt:QC.FMT,v:QC.VER,app:'alola-quality-pwa',code:rep.code,createdAt:rep.createdAt,report:rep,pdf:b64(pdf),pdfSha256:await sha(pdf)};
-  await tx('reports','readwrite',s=>s.put(file));const oldId=D.id;D=blank(D);await saveDraft();await dropDraft(oldId);window._restored=false;busy('');T=1;render();showDone(file)}catch(x){busy('');alert('حصلت مشكلة: '+x.message)}}
-const names=f=>({pdf:`${f.code}.pdf`,json:`${f.code}.alola-qc.json`});
+  await tx('reports','readwrite',s=>s.put(file));const oldId=D.id;D=blank(D);await saveDraft();await dropDraft(oldId);window._restored=false;busy('');T=1;render();showDone(file);share(file,'both')}catch(x){busy('');alert('حصلت مشكلة: '+x.message)}}
+const names=f=>({pdf:`تقرير جودة العلا — ${f.code}.pdf`,json:`${f.code}.alola-qc.json`});
 function files(f,what){const n=names(f),o=[];if(what!=='json')o.push(new File([unb64(f.pdf)],n.pdf,{type:'application/pdf'}));if(what!=='pdf')o.push(new File([JSON.stringify(f)],n.json,{type:'application/json'}));return o}
-async function share(f,what){const fl=files(f,what);try{if(navigator.canShare&&navigator.canShare({files:fl})){await navigator.share({files:fl,title:'تقرير الجودة '+f.report.date,text:'تقرير فحص الجودة — شركة العلا '+f.report.date+' ('+f.code+')'});return}}catch(x){if(x.name==='AbortError')return}
+/* PDF: in-app preview first (PdfShare) — the WhatsApp/share tap happens inside the preview; nothing is auto-downloaded. */
+function share(f,what){const fl=files(f,what);const pdf=fl.find(x=>x.type==='application/pdf');
+ if(pdf){PdfShare.open(pdf,pdf.name,{title:'تقرير الجودة '+f.report.date,heading:'معاينة تقرير الجودة',extra:fl.filter(x=>x!==pdf),note:what==='both'?'هيتبعت معاه ملف البيانات ('+names(f).json+') لبرنامج الماك.':''});return}
+ try{if(navigator.canShare&&navigator.canShare({files:fl})){navigator.share({files:fl,title:'بيانات تقرير الجودة '+f.code}).catch(()=>{});return}}catch(x){}
  fl.forEach((x,k)=>setTimeout(()=>{const a=document.createElement('a');a.href=URL.createObjectURL(x);a.download=x.name;document.body.appendChild(a);a.click();setTimeout(()=>a.remove(),1000)},k*600))}
 async function shareCode(code,what){const f=await tx('reports','readonly',s=>s.get(code));if(f)share(f,what)}
 async function delRep(code){if(!confirm('تحذف التقرير ده من الموبايل؟'))return;await tx('reports','readwrite',s=>s.delete(code));render()}
 function showDone(f){const d=$('#done');window._F=f;d.style.display='flex';d.innerHTML=`<div class="card"><h3>✔ التقرير اتعمل</h3><div class="note">الكود: <b dir="ltr">${e(f.code)}</b><br>⏱ <b>الفحص القادم: ${QC.hm(QC.next(f.report||{code:f.code}))}</b> (كل ${QC.EVERY} دقيقة — 4 كراتين بمقاسات مختلفة)<br>ابعت الملفين للمالك على واتساب أو الإيميل: <b>PDF</b> للقراءة، و<b>ملف البيانات</b> عشان يتضاف لبرنامج الماك.</div>
-<button class="btn o" style="margin-top:10px" onclick="share(_F,'both')">📤 مشاركة الملفين</button><div class="g2" style="margin-top:8px"><button class="btn" onclick="share(_F,'pdf')">PDF بس</button><button class="btn" onclick="share(_F,'json')">ملف البيانات بس</button></div><button class="btn g" style="margin-top:8px" onclick="$('#done').style.display='none'">إغلاق</button></div>`}
+<button class="btn o" style="margin-top:10px" onclick="share(_F,'both')">👁 معاينة وإرسال الملفين (واتساب)</button><div class="g2" style="margin-top:8px"><button class="btn" onclick="share(_F,'pdf')">PDF بس (معاينة)</button><button class="btn" onclick="share(_F,'json')">ملف البيانات بس</button></div><button class="btn g" style="margin-top:8px" onclick="$('#done').style.display='none'">إغلاق</button></div>`}
 // ---------- boot ----------
 (async()=>{let light=null;try{light=JSON.parse(localStorage.getItem(DK))}catch(x){}
  try{DB=await idb();const cur=localStorage.getItem('alola_qc_cur');let v=cur?await tx('kv','readonly',st=>st.get('d:'+cur)):null;

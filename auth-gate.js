@@ -1,4 +1,5 @@
-/*! Alola shared login gate v7 — talks to alola-maggi-auth */
+/*! Alola shared login gate v8 — talks to alola-maggi-auth. v8: Amir's paired phone/Mac is remembered for good
+    (silent re-entry, self-healing pairing proof, one-tap switch between apps); staff login unchanged. */
 (function () {
   'use strict';
   var API = (window.ALOLA_AUTH_API || 'https://alola-maggi-auth.onrender.com').replace(/\/$/, '');
@@ -13,10 +14,23 @@
     if (h.indexOf('alola-receiving') !== -1) return 'receiving';
     if (h.indexOf('alola-production') !== -1) return 'production';
     if (h.indexOf('alola-quality') !== -1) return 'quality';
+    if (h.indexOf('paper-handover') !== -1) return 'handover';
+    if (h.indexOf('alola-cost-statement') !== -1) return 'cost';
     return '';
   })();
-  var AMIR_APPS = ['packing', 'production', 'quality', 'receiving'];
-  var APP_TITLES = { production: 'الإنتاج اليومي — العلا', quality: 'الجودة — العلا', receiving: 'استلام الخام — العلا', packing: 'باكينج ليست العلا', maggi: 'ماجي', cost: 'بيان التكلفة — العلا' };
+  var AMIR_APPS = ['packing', 'production', 'quality', 'receiving', 'handover', 'cost', 'maggi'];
+  var PROOF_KEY = 'alola_amir_proof';   // last quick-entry token: proof this device was paired (kept on logout)
+  var OUT_KEY = 'alola_amir_out';       // Amir pressed «خروج»: no automatic re-entry until he taps «دخول أمير»
+  var HANDOFF = (function () {          // one-time link from another Alola app (#amir-handoff=…)
+    try {
+      var m = /[#&]amir-handoff=([A-Za-z0-9_.-]+)/.exec(location.hash || '');
+      if (!m) return '';
+      history.replaceState(history.state, '', location.pathname + location.search);
+      return m[1];
+    } catch (e) { return ''; }
+  })();
+  var OTHER_APPS = [['production', 'الإنتاج اليومي'], ['packing', 'باكينج ليست العلا'], ['quality', 'الجودة'], ['receiving', 'استلام الخام'], ['cost', 'بيان التكلفة'], ['handover', 'تسليم أصول ورق'], ['maggi', 'باكينج ليست ماجي']];
+  var APP_TITLES = { production: 'الإنتاج اليومي — العلا', quality: 'الجودة — العلا', receiving: 'استلام الخام — العلا', packing: 'باكينج ليست العلا', maggi: 'باكينج ليست ماجي', cost: 'بيان التكلفة — العلا', handover: 'تسليم أصول ورق' };
   // wake the free auth server early (cold start) while the user is typing
   var wakeP = null;
   function wake() {
@@ -52,6 +66,7 @@
     try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
   }
   function setSession(token, user) {
+    rememberAmir(token, user);
     try {
       localStorage.setItem(TOKEN_KEY, token);
       localStorage.setItem(USER_KEY, JSON.stringify(user || {}));
@@ -62,6 +77,16 @@
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(USER_KEY);
     } catch (e) {}
+  }
+  function lsGet(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
+  function lsSet(k, v) { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch (e) {} }
+  function quickToken(t) { // quick-entry tokens carry the app id ("a")
+    try { var p = JSON.parse(atob(String(t).split('.')[0].replace(/-/g, '+').replace(/_/g, '/'))); return !!(p && p.u === 'amir' && p.a === APP && p.m === true); } catch (e) { return false; }
+  }
+  function rememberAmir(token, user) {
+    if (user && user.username === 'amir' && AMIR_APPS.indexOf(APP) !== -1 && quickToken(token)) {
+      lsSet(PROOF_KEY, token); lsSet(OUT_KEY, ''); lsSet('alola_amir_paired', '1');
+    }
   }
   function getUser() {
     try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); } catch (e) { return null; }
@@ -180,7 +205,7 @@
     if (eEl) eEl.textContent = '';
     if (bEl) { bEl.disabled = true; bEl.textContent = 'جاري الدخول…'; }
     try {
-      var body = { username: username, password: password, deviceId: deviceId(), app: APP };
+      var body = { username: username, password: password, deviceId: deviceId(), app: APP, label: devLabel() };
       var r;
       try {
         r = await api('/api/login', { method: 'POST', body: body, timeout: 60000 });
@@ -236,7 +261,7 @@
     var bEl = document.getElementById(withCode ? 'alola-auth-pair' : 'alola-auth-amir');
     var bTxt = bEl ? bEl.textContent : '';
     if (eEl) eEl.textContent = '';
-    var body = { deviceId: deviceId(), app: APP, label: devLabel() };
+    var body = { deviceId: deviceId(), app: APP, label: devLabel(), proof: lsGet(PROOF_KEY) };
     if (withCode) {
       var cEl = document.getElementById('alola-auth-code');
       body.code = String(cEl && cEl.value || '').replace(/\D/g, '');
@@ -276,14 +301,66 @@
     bar.id = 'alola-auth-bar';
     var label = (user && user.label) || (user && user.username) || '';
     bar.innerHTML = '<button type="button" id="alola-auth-out" title="خروج">خروج' + (label ? ' · ' + label : '') + '</button>' +
-      (user && user.admin ? '<button type="button" id="alola-auth-adm" title="إدارة الأجهزة">إدارة الأجهزة</button>' : '');
+      (user && user.admin ? '<button type="button" id="alola-auth-adm" title="إدارة الأجهزة">إدارة الأجهزة</button>' : '') +
+      (user && user.username === 'amir' && quickToken(getToken()) ? '<button type="button" id="alola-auth-apps" title="افتح برنامج تاني من غير كود">برامجي</button>' : '');
     document.body.appendChild(bar);
     document.getElementById('alola-auth-out').onclick = function () {
+      if (user && user.username === 'amir') lsSet(OUT_KEY, '1');
       clearSession();
       location.reload();
     };
     var adm = document.getElementById('alola-auth-adm');
     if (adm) adm.onclick = openAdmin;
+    var apps = document.getElementById('alola-auth-apps');
+    if (apps) apps.onclick = openApps;
+  }
+
+  function openApps() {
+    var panel = document.getElementById('alola-auth-admin');
+    if (panel) panel.remove();
+    panel = document.createElement('div');
+    panel.id = 'alola-auth-admin';
+    panel.innerHTML = '<div class="box"><h3>برامجي</h3><div style="font-size:13px;color:#666;margin-bottom:6px">افتح أي برنامج وانت داخل على طول — والتليفون ده هيتفتكر فيه كمان.</div>' +
+      OTHER_APPS.filter(function (a) { return a[0] !== APP; }).map(function (a) { return '<div class="row"><span><b>' + a[1] + '</b></span><button type="button" data-to="' + a[0] + '">فتح</button></div>'; }).join('') +
+      '<div class="msg" id="alola-auth-amsg"></div><div style="margin-top:12px;text-align:left"><button type="button" class="x" id="alola-auth-aclose">إغلاق</button></div></div>';
+    document.body.appendChild(panel);
+    panel.style.display = 'flex';
+    document.getElementById('alola-auth-aclose').onclick = function () { panel.remove(); };
+    panel.querySelectorAll('button[data-to]').forEach(function (b) {
+      b.onclick = async function () {
+        var msg = document.getElementById('alola-auth-amsg');
+        b.disabled = true; msg.textContent = 'جاري الفتح…';
+        try {
+          var r = await api('/api/amir-handoff', { method: 'POST', body: { to: b.getAttribute('data-to'), app: APP } });
+          if (r.data && r.data.ok && r.data.url) { location.href = r.data.url; return; }
+          msg.textContent = (r.data && r.data.error) || 'تعذر الفتح';
+        } catch (e) { msg.textContent = 'تعذر الاتصال بالسيرفر'; }
+        b.disabled = false;
+      };
+    });
+  }
+
+  // Amir's device: enter silently (paired list, or signed pairing proof, or a handoff link). true = signed in.
+  async function silentAmir(handoff) {
+    if (AMIR_APPS.indexOf(APP) === -1) return false;
+    var proof = lsGet(PROOF_KEY);
+    if (!handoff && (!proof || lsGet(OUT_KEY) === '1')) return false;
+    var body = { deviceId: deviceId(), app: APP, label: devLabel(), proof: proof };
+    if (handoff) body.handoff = handoff;
+    var r = await api('/api/login-amir', { method: 'POST', body: body, timeout: 90000 });
+    if (r.data && r.data.ok) {
+      setSession(r.data.token, r.data.user);
+      hideOverlay();
+      mountBar(r.data.user);
+      return true;
+    }
+    if (r.data && r.data.code === 'PAIR_REQUIRED' && !handoff) lsSet(PROOF_KEY, '');
+    return r.data && r.data.error ? r.data.error : false;
+  }
+  function busyOverlay() {
+    showOverlay();
+    var e = document.getElementById('alola-auth-err');
+    if (e) e.textContent = 'جاري دخول أمير تلقائي…';
   }
 
   async function openAdmin() {
@@ -331,7 +408,7 @@
           try {
             var rr = await api('/api/admin/amir-unpair?app=' + encodeURIComponent(APP), { method: 'POST', body: { n: Number(btn.getAttribute('data-n')), app: APP } });
             msg.textContent = (rr.data && (rr.data.message || rr.data.error)) || 'تم';
-            if (rr.data && rr.data.ok && rr.data.self) { try { localStorage.removeItem(PAIRED_KEY); } catch (e3) {} clearSession(); setTimeout(function () { location.reload(); }, 1200); return; }
+            if (rr.data && rr.data.ok && rr.data.self) { try { localStorage.removeItem(PAIRED_KEY); localStorage.removeItem(PROOF_KEY); } catch (e3) {} clearSession(); setTimeout(function () { location.reload(); }, 1200); return; }
             openAdmin();
           } catch (e) {
             msg.textContent = 'فشل الفصل';
@@ -362,7 +439,29 @@
     injectStyles();
     wake();
     var token = getToken();
+    var amirDev = AMIR_APPS.indexOf(APP) !== -1 && !!lsGet(PROOF_KEY) && lsGet(OUT_KEY) !== '1';
+    if (HANDOFF) {
+      busyOverlay();
+      try {
+        var hr = await silentAmir(HANDOFF);
+        if (hr === true) return;
+        var he = document.getElementById('alola-auth-err');
+        if (he) he.textContent = typeof hr === 'string' ? hr : 'تعذر الدخول من الرابط';
+      } catch (e) {
+        var he2 = document.getElementById('alola-auth-err');
+        if (he2) he2.textContent = 'السيرفر بيصحى… افتح الرابط تاني بعد لحظات';
+      }
+      return;
+    }
     if (!token) {
+      if (amirDev) {
+        busyOverlay();
+        var sr = false;
+        try { sr = await silentAmir(); if (sr === true) return; } catch (e) { sr = 'السيرفر بيصحى… اضغط «دخول أمير» بعد لحظات'; }
+        var se = document.getElementById('alola-auth-err');
+        if (se) se.textContent = typeof sr === 'string' ? sr : '';
+        return;
+      }
       showOverlay();
       return;
     }
@@ -374,8 +473,15 @@
         mountBar(r.data.user);
         return;
       }
+      if (r.status === 503 && r.data && r.data.code === 'STORE_DOWN') throw new Error('store down');
+      if (amirDev || quickToken(token)) {
+        if (!lsGet(PROOF_KEY) && quickToken(token)) lsSet(PROOF_KEY, token);
+        busyOverlay();
+        var ar = await silentAmir();
+        if (ar === true) return;
+      }
       clearSession();
-      if (r.data && r.data.code === 'AMIR_DEVICE') { try { localStorage.removeItem(PAIRED_KEY); } catch (e) {} }
+      if (r.data && r.data.code === 'AMIR_DEVICE' && !lsGet(PROOF_KEY)) { try { localStorage.removeItem(PAIRED_KEY); } catch (e) {} }
       showOverlay();
       if (r.data && r.data.error) {
         var el = document.getElementById('alola-auth-err');
@@ -386,7 +492,7 @@
       var user = getUser();
       var pairedOk = true;
       if (user && user.username === 'amir' && AMIR_APPS.indexOf(APP) !== -1) {
-        try { pairedOk = localStorage.getItem(PAIRED_KEY) === '1'; } catch (e2) { pairedOk = false; }
+        pairedOk = quickToken(token) || lsGet(PAIRED_KEY) === '1';
       }
       if (user && user.username && appAllowed(user) && pairedOk) {
         hideOverlay();

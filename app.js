@@ -16,19 +16,26 @@ function delPh(key,j){phList(key).splice(j,1);saveDraft();render()}
 function idb(){return new Promise((ok,no)=>{const r=indexedDB.open(IDBN,1);r.onupgradeneeded=()=>{r.result.createObjectStore('kv');r.result.createObjectStore('reports',{keyPath:'code'})};r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)})}
 const tx=(st,m,f)=>new Promise((ok,no)=>{const t=DB.transaction(st,m);const r=f(t.objectStore(st));t.oncomplete=()=>ok(r&&r.result);t.onerror=()=>no(t.error)});
 const hasData=d=>d&&d.rows&&d.rows.some(r=>r.n||r.v||r.p||r.dn||(r.ph||[]).length||(r.phD||[]).length||(r.phW||[]).length||r.rots.some(x=>x.n||x.t||(x.ph||[]).length));
-let SAVING=Promise.resolve();
-function saveDraft(){D.updatedAt=new Date().toISOString();const j=JSON.stringify(D);try{localStorage.setItem('alola_qc_cur',D.id)}catch(x){}
- const light=JSON.stringify({...D,rows:D.rows.map(r=>({...r,ph:[],phD:[],phW:[],rots:r.rots.map(x=>({...x,ph:[]}))}))});try{localStorage.setItem(DK,light)}catch(x){}
- SAVING=SAVING.then(()=>DB?tx('kv','readwrite',st=>st.put(j,'d:'+D.id)):null).then(()=>saved(true)).catch(()=>saved(false));return SAVING}
-function saved(ok){const el=$('#svd');if(el){el.textContent=ok?'✓ تم الحفظ تلقائياً '+new Date().toTimeString().slice(0,8):'⚠ تعذر الحفظ — المساحة ممتلئة';el.style.color=ok?'#cfe8c4':'#fecaca'}}
-async function allDrafts(){if(!DB)return[];const ks=await tx('kv','readonly',st=>st.getAllKeys());const out=[];for(const k of ks.filter(k=>String(k).startsWith('d:'))){try{out.push(JSON.parse(await tx('kv','readonly',st=>st.get(k))))}catch(x){}}return out}
-async function dropDraft(id){if(DB)await tx('kv','readwrite',st=>st.delete('d:'+id))}
-async function openDraft(id){await saveDraft();const v=await tx('kv','readonly',st=>st.get('d:'+id));if(v){D=fixD(JSON.parse(v));localStorage.setItem('alola_qc_cur',D.id);T=1;tab(1);scrollTo(0,0)}}
-async function delDraft(id){if(!confirm('تمسح المسودة دي نهائياً؟'))return;await dropDraft(id);if(D.id===id){D=blank(D);await saveDraft()}render()}
+let SAVING=Promise.resolve(),DT=null,WAIT=[];
+/* v2 autosave: every change → text copy written to localStorage at once (survives a kill), full draft (with photos)
+   to IndexedDB 350 ms later (debounced) and immediately when the app goes to the background / closes. */
+const lightOf=d=>JSON.stringify({...d,rows:d.rows.map(r=>({...r,ph:[],phD:[],phW:[],rots:r.rots.map(x=>({...x,ph:[]}))}))});
+function saveLS(){D.updatedAt=new Date().toISOString();try{localStorage.setItem('alola_qc_cur',D.id)}catch(x){}const l=lightOf(D);try{localStorage.setItem(DK,l);localStorage.setItem(DK+':'+D.id,l);return true}catch(x){return false}}
+function saveDraft(now){const ok=saveLS();if(ok)saved(DB?'ok':'ls');const p=new Promise(r=>WAIT.push(r));clearTimeout(DT);if(now)flushDraft();else DT=setTimeout(flushDraft,350);return p}
+function flushDraft(){clearTimeout(DT);DT=null;const ws=WAIT.splice(0);if(!D)return SAVING;const j=JSON.stringify(D),id=D.id;
+ SAVING=SAVING.then(()=>DB?tx('kv','readwrite',st=>st.put(j,'d:'+id)).then(()=>saved('ok')):saved('ls')).catch(()=>saved('err'));SAVING.then(()=>ws.forEach(r=>r()));return SAVING}
+function saved(st){const el=$('#svd');if(!el)return;const t=new Date().toTimeString().slice(0,5);el.textContent=st==='err'?'⚠ تعذر الحفظ الكامل — المساحة ممتلئة (الكلام محفوظ، الصور ممكن لأ)':st==='ls'?'اتحفظ ✓ الساعة '+t+' (على الموبايل — من غير الصور)':'اتحفظ ✓ الساعة '+t;el.style.color=st==='err'?'#fecaca':'#cfe8c4'}
+function lsDrafts(){const out=[];try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith(DK+':')){try{out.push(JSON.parse(localStorage.getItem(k)))}catch(x){}}}}catch(x){}return out}
+async function allDrafts(){if(!DB)return lsDrafts();const ks=await tx('kv','readonly',st=>st.getAllKeys());const out=[];for(const k of ks.filter(k=>String(k).startsWith('d:'))){try{out.push(JSON.parse(await tx('kv','readonly',st=>st.get(k))))}catch(x){}}return out}
+async function dropDraft(id){try{localStorage.removeItem(DK+':'+id)}catch(x){}if(DB)await tx('kv','readwrite',st=>st.delete('d:'+id))}
+async function openDraft(id){await saveDraft(1);let v=DB?await tx('kv','readonly',st=>st.get('d:'+id)):null;if(!v)v=localStorage.getItem(DK+':'+id);if(v){D=fixD(JSON.parse(v));localStorage.setItem('alola_qc_cur',D.id);T=1;tab(1);scrollTo(0,0)}}
+async function delDraft(id){if(!confirm('تمسح المسودة دي نهائياً؟'))return;await dropDraft(id);if(D.id===id){D=blank(D);await saveDraft(1)}render()}
 function fixD(d){if(!d.id)d.id='D'+Date.now().toString(36);if(d.tol&&d.tol['تانية']!=null&&d.tol['ثانية']==null){d.tol['ثانية']=d.tol['تانية'];delete d.tol['تانية']}d.rows.forEach(r=>{r.g=QC.normGrade(r.g);if(!r.pk)r.pk='كرتون';r.phD=r.phD||[];r.phW=r.phW||[];r.ph=r.ph||[];r.c=QC.normCtype(r.c);r.rots.forEach(x=>x.ph=x.ph||[])});return d}
 async function banner(){const el=$('#bnr');if(!el)return;const L=(await allDrafts()).filter(d=>d.id!==D.id&&hasData(d)).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
  el.innerHTML=(window._restored?`<div class="note" style="margin-bottom:8px">📝 <b>مسودة غير مكتملة</b> — اتسترجعت تلقائياً (آخر حفظ ${e((D.updatedAt||'').slice(11,16))}). كمّل من مكان ما وقفت.</div>`:'')+(L.length?`<div class="note" style="margin-bottom:8px">📝 <b>مسودات غير مكتملة (${L.length})</b>${L.map(d=>`<div class="it"><b>${e(d.date)} ${e(d.exp||'')} — ${d.rows.filter(r=>r.n).length} كرتونة<small>آخر حفظ ${e((d.updatedAt||'').replace('T',' ').slice(0,16))}</small></b><button class="btn s" onclick="openDraft('${d.id}')">كمّل</button><button class="btn r s" onclick="delDraft('${d.id}')">×</button></div>`).join('')}</div>`:'')}
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')saveDraft()});window.addEventListener('pagehide',()=>saveDraft());
+const bgSave=()=>{if(D){saveLS();flushDraft()}};document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')bgSave()});window.addEventListener('pagehide',bgSave);window.addEventListener('beforeunload',bgSave);document.addEventListener('freeze',bgSave);window.addEventListener('blur',bgSave);
+/* ask Safari to keep this app's storage (also on the first tap — some browsers only grant it after a user gesture) */
+const askKeep=()=>{try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{})}catch(x){}};document.addEventListener('pointerdown',askKeep,{once:true});
 const allReports=()=>DB?tx('reports','readonly',s=>s.getAll()):Promise.resolve([]);
 // ---------- UI ----------
 function tab(n){T=n;[1,2,3].forEach(i=>$('#t'+i).classList.toggle('on',i===n));$('#foot').style.display=n===1?'flex':'none';render()}
@@ -87,7 +94,7 @@ function cropAsk(im){return new Promise(res=>{const o=document.createElement('di
 document.addEventListener('change',async ev=>{const t=ev.target;if(t.dataset.ph==null)return;const key=t.dataset.ph,isW=/\|w$/.test(key),L=phList(key);const fs=[...t.files];t.value='';for(const f of fs){const im=new Image();const ok=await new Promise(r=>{im.onload=()=>r(1);im.onerror=()=>r(0);im.src=URL.createObjectURL(f)});if(!ok)continue;let out=shrink(im,0,0,im.width,im.height,1600);if(isW){const s=await cropAsk(im);if(s)out=shrink(im,s[0],s[1],s[2],s[3],1280)}L.push(out);URL.revokeObjectURL(im.src)}saveDraft();render()});
 function addRow(){D.rows.push(row(D.rows[D.rows.length-1]));saveDraft();render().then(()=>$('#r'+(D.rows.length-1)).scrollIntoView({behavior:'smooth'}))}
 function delRow(i){if(!confirm('تحذف كرتونة '+(i+1)+'؟'))return;D.rows.splice(i,1);if(!D.rows.length)D.rows.push(row());saveDraft();render()}
-async function newDraft(){await saveDraft();if(!hasData(D))return;D=blank(D);await saveDraft();window._restored=false;render();scrollTo(0,0)}
+async function newDraft(){await saveDraft(1);if(!hasData(D))return;D=blank(D);await saveDraft(1);window._restored=false;render();scrollTo(0,0)}
 // ---------- PDF ----------
 const busy=m=>{const b=$('#busy');b.style.display=m?'flex':'none';b.textContent=m||''};
 async function makePdf(rep){$('#qcss').textContent=QC.CSS;const st=$('#stage');st.innerHTML=QC.html(rep);await document.fonts.ready;await Promise.all([...st.querySelectorAll('img')].map(i=>i.complete?1:new Promise(r=>{i.onload=i.onerror=r})));
@@ -104,7 +111,7 @@ async function sha(buf){return [...new Uint8Array(await crypto.subtle.digest('SH
 async function issue(){const rows=QC.used(D);if(!rows.length)return alert('مفيش ولا كرتونة متسجلة');const ms=QC.missing({rows});if(ms.length)return alert('مينفعش يطلع التقرير قبل ما تكمّل:\n\n'+ms.join('\n'));const dv=QC.diversity({rows});if(dv.length&&!confirm('تنبيه:\n'+dv.join('\n')+'\n\nتكمّل وتطلع التقرير؟'))return;
  busy('جاري عمل التقرير PDF…');try{const rep=JSON.parse(JSON.stringify(D));rep.code=QC.code(new Date(),rep.date);rep.createdAt=new Date().toISOString();rep.rows=QC.used(rep);rep.rows.forEach(r=>{if(r.b&&!QC.L.brand.includes(r.b)&&!XL.brand.includes(r.b))XL.brand.push(r.b)});saveXL();
   const pdf=await makePdf(rep);const file={fmt:QC.FMT,v:QC.VER,app:'alola-quality-pwa',code:rep.code,createdAt:rep.createdAt,report:rep,pdf:b64(pdf),pdfSha256:await sha(pdf)};
-  await tx('reports','readwrite',s=>s.put(file));const oldId=D.id;D=blank(D);await saveDraft();await dropDraft(oldId);window._restored=false;busy('');T=1;render();showDone(file);share(file,'both')}catch(x){busy('');alert('حصلت مشكلة: '+x.message)}}
+  await tx('reports','readwrite',s=>s.put(file));const oldId=D.id;D=blank(D);await saveDraft(1);await dropDraft(oldId);window._restored=false;busy('');T=1;render();showDone(file);share(file,'both')}catch(x){busy('');alert('حصلت مشكلة: '+x.message)}}
 const names=f=>({pdf:`تقرير جودة العلا — ${f.code}.pdf`,json:`${f.code}.alola-qc.json`});
 function files(f,what){const n=names(f),o=[];if(what!=='json')o.push(new File([unb64(f.pdf)],n.pdf,{type:'application/pdf'}));if(what!=='pdf')o.push(new File([JSON.stringify(f)],n.json,{type:'application/json'}));return o}
 /* PDF: in-app preview first (PdfShare) — the WhatsApp/share tap happens inside the preview; nothing is auto-downloaded. */
@@ -119,9 +126,10 @@ function showDone(f){const d=$('#done');window._F=f;d.style.display='flex';d.inn
 // ---------- boot ----------
 (async()=>{let light=null;try{light=JSON.parse(localStorage.getItem(DK))}catch(x){}
  try{DB=await idb();const cur=localStorage.getItem('alola_qc_cur');let v=cur?await tx('kv','readonly',st=>st.get('d:'+cur)):null;
+  if(!v&&cur){const l=localStorage.getItem(DK+':'+cur)||(light&&light.id===cur?JSON.stringify(light):null);if(l)v=l}
   if(!v){const old=await tx('kv','readonly',st=>st.get('draft'));if(old)v=old}
   if(!v){const L=(await allDrafts()).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));if(L[0])v=JSON.stringify(L[0])}
   if(v){D=JSON.parse(v);if(light&&light.id===D.id&&(light.updatedAt||'')>(D.updatedAt||'')){/* text newer in LS: merge text, keep photos */const ph=D.rows;D={...light,rows:light.rows.map((r,i)=>({...r,ph:(ph[i]||{}).ph||[],phD:(ph[i]||{}).phD||[],phW:(ph[i]||{}).phW||[],rots:r.rots.map((x,j)=>({...x,ph:(((ph[i]||{}).rots||[])[j]||{}).ph||[]}))}))}}}
   const xv=await tx('kv','readonly',st=>st.get('extra'));if(xv&&!localStorage.getItem(XK)){XL=JSON.parse(xv);XL.rots=(XL.rots||[]).map(x=>typeof x==='string'?x:x.k)}}catch(x){DB=null}
- if(!D&&light)D=light;if(!D||!D.rows)D=blank();fixD(D);window._restored=hasData(D);await saveDraft();render();
+ if(!D&&light)D=light;if(!D||!D.rows)D=blank();fixD(D);window._restored=hasData(D);await saveDraft(1);render();
  if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('sw.js').catch(()=>{});if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{})})();

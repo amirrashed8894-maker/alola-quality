@@ -6,15 +6,34 @@ const row=p=>({time:now(),v:p?.v||'',s:'',pk:p?.pk||'كرتون',c:p?.c||'',b:p?
 const blank=o=>({id:'D'+Date.now().toString(36)+Math.random().toString(36).slice(2,5),startedAt:new Date().toISOString(),date:today(),exp:o?.exp||'العلا',shift:o?.shift||'',insp:o?.insp||'',tol:{...QC.DEFTOL,...(o?.tol||{})},notes:'',rows:[row(),row(),row(),row()]});
 let D,DB=null,T=1;const XK='alola_qc_extra_v1';
 let XL=(()=>{try{return JSON.parse(localStorage.getItem(XK))||{}}catch(x){return{}}})();['brand','exporter','rots','carton'].forEach(k=>XL[k]=XL[k]||[]);XL.rots=XL.rots.map(x=>typeof x==='string'?x:x.k);
-const saveXL=()=>{try{localStorage.setItem(XK,JSON.stringify(XL))}catch(x){}if(DB)tx('kv','readwrite',s=>s.put(JSON.stringify(XL),'extra')).catch(()=>{})};
+const saveXL=()=>{try{localStorage.setItem(XK,JSON.stringify(XL))}catch(x){}txs('kv','readwrite',s=>s.put(JSON.stringify(XL),'extra'))};
 const LST=k=>[...new Set(QC.L[k].concat(XL[k]||[]))];
 const rotList=()=>[...new Set(QC.ROTS.concat(XL.rots))];
 const phBox=(key,list,lab)=>`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:4px 0"><label class="btn g s" style="display:inline-block">📷 ${lab}<input type="file" accept="image/*" multiple data-ph="${key}" style="display:none"></label>${(list||[]).map((p,j)=>`<span class="ph" style="margin:0"><div><img src="${p}"><button onclick="delPh('${key}',${j})">×</button></div></span>`).join('')}</div>`;
 function phList(key){const [i,k,j]=key.split('|');const r=D.rows[+i];if(k==='r'){const x=r.rots[+j];return x.ph=x.ph||[]}if(k==='d')return r.phD=r.phD||[];if(k==='w')return r.phW=r.phW||[];return r.ph=r.ph||[]}
 function delPh(key,j){phList(key).splice(j,1);saveDraft();render()}
 // ---------- storage (IndexedDB + localStorage copy) ----------
-function idb(){return new Promise((ok,no)=>{const r=indexedDB.open(IDBN,1);r.onupgradeneeded=()=>{r.result.createObjectStore('kv');r.result.createObjectStore('reports',{keyPath:'code'})};r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)})}
-const tx=(st,m,f)=>new Promise((ok,no)=>{const t=DB.transaction(st,m);const r=f(t.objectStore(st));t.oncomplete=()=>ok(r&&r.result);t.onerror=()=>no(t.error)});
+/* v25.1: IndexedDB بقى بيتفتح بشكل موثوق (مهلة، إعادة فتح لو سفاري قفل الاتصال بعد الخلفية) وكل استخدام بيستنى الفتح.
+   لو IndexedDB مش متاح خالص: المسودة في localStorage والتقارير في الذاكرة + localStorage — إصدار التقرير ما بيفشلش أبداً. */
+let DBP=null,DBFAIL=0;
+function idbOpen(){return new Promise(ok=>{let done=false;const fin=v=>{if(!done){done=true;ok(v)}};let r;try{if(!window.indexedDB)return fin(null);r=indexedDB.open(IDBN,1)}catch(x){return fin(null)}
+ const to=setTimeout(()=>fin(null),6000);
+ r.onupgradeneeded=()=>{try{const d=r.result;if(!d.objectStoreNames.contains('kv'))d.createObjectStore('kv');if(!d.objectStoreNames.contains('reports'))d.createObjectStore('reports',{keyPath:'code'})}catch(x){}};
+ r.onsuccess=()=>{clearTimeout(to);const d=r.result;if(done){try{d.close()}catch(x){}return}const drop=()=>{if(DB===d){DB=null;DBP=null}};d.onclose=drop;d.onversionchange=()=>{try{d.close()}catch(x){}drop()};DB=d;fin(d)};
+ r.onerror=ev=>{clearTimeout(to);try{ev.preventDefault()}catch(x){}fin(null)};r.onblocked=()=>{}})}
+function getDB(){if(DB)return Promise.resolve(DB);if(!DBP)DBP=idbOpen().then(d=>{if(!d){DBP=null;DBFAIL++}return d});return DBP}
+function idb(){return getDB().then(d=>{if(!d)throw new Error('IDB_UNAVAILABLE');return d})}
+async function tx(st,m,f,again){const d=await getDB();if(!d)throw new Error('IDB_UNAVAILABLE');
+ try{return await new Promise((ok,no)=>{const t=d.transaction(st,m);const r=f(t.objectStore(st));t.oncomplete=()=>ok(r&&r.result);t.onerror=()=>no(t.error||new Error('tx error'));t.onabort=()=>no(t.error||new Error('tx abort'))})}
+ catch(x){const n=(x&&x.name)||'',msg=(x&&x.message)||'';if(!again&&(n==='InvalidStateError'||n==='UnknownError'||n==='NotFoundError'||/connection|clos|lost|null/i.test(msg))){if(DB===d){try{d.close()}catch(y){}DB=null;DBP=null}return tx(st,m,f,1)}throw x}}
+const txs=(st,m,f,dflt)=>tx(st,m,f).catch(()=>dflt);
+/* reports fallback (لو IndexedDB مش شغال) */
+const RK='alola_qc_rep:',MEMR=new Map();
+function lsReports(){const o=[];try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith(RK)){try{o.push(JSON.parse(localStorage.getItem(k)))}catch(x){}}}}catch(x){}return o}
+async function putReport(f){try{await tx('reports','readwrite',s=>s.put(f));MEMR.delete(f.code);try{localStorage.removeItem(RK+f.code)}catch(x){}return 'idb'}catch(x){MEMR.set(f.code,f);try{localStorage.setItem(RK+f.code,JSON.stringify(f));return 'ls'}catch(y){return 'mem'}}}
+async function getReport(code){const f=await txs('reports','readonly',s=>s.get(code),null);if(f)return f;if(MEMR.has(code))return MEMR.get(code);try{const v=localStorage.getItem(RK+code);return v?JSON.parse(v):null}catch(x){return null}}
+async function delReport(code){await txs('reports','readwrite',s=>s.delete(code));MEMR.delete(code);try{localStorage.removeItem(RK+code)}catch(x){}}
+async function migrateReports(){const L=[...MEMR.values(),...lsReports()];for(const f of L){if(f&&f.code&&(await putReport(f))!=='idb')break}}
 const hasData=d=>d&&d.rows&&d.rows.some(r=>r.n||r.v||r.p||r.dn||(r.ph||[]).length||(r.phD||[]).length||(r.phW||[]).length||r.rots.some(x=>x.n||x.t||(x.ph||[]).length));
 let SAVING=Promise.resolve(),DT=null,WAIT=[];
 /* v2 autosave: every change → text copy written to localStorage at once (survives a kill), full draft (with photos)
@@ -23,20 +42,20 @@ const lightOf=d=>JSON.stringify({...d,rows:d.rows.map(r=>({...r,ph:[],phD:[],phW
 function saveLS(){D.updatedAt=new Date().toISOString();try{localStorage.setItem('alola_qc_cur',D.id)}catch(x){}const l=lightOf(D);try{localStorage.setItem(DK,l);localStorage.setItem(DK+':'+D.id,l);return true}catch(x){return false}}
 function saveDraft(now){const ok=saveLS();if(ok)saved(DB?'ok':'ls');const p=new Promise(r=>WAIT.push(r));clearTimeout(DT);if(now)flushDraft();else DT=setTimeout(flushDraft,350);return p}
 function flushDraft(){clearTimeout(DT);DT=null;const ws=WAIT.splice(0);if(!D)return SAVING;const j=JSON.stringify(D),id=D.id;
- SAVING=SAVING.then(()=>DB?tx('kv','readwrite',st=>st.put(j,'d:'+id)).then(()=>saved('ok')):saved('ls')).catch(()=>saved('err'));SAVING.then(()=>ws.forEach(r=>r()));return SAVING}
+ SAVING=SAVING.then(()=>tx('kv','readwrite',st=>st.put(j,'d:'+id)).then(()=>saved('ok'))).catch(x=>saved(x&&x.message==='IDB_UNAVAILABLE'?'ls':'err'));SAVING.then(()=>ws.forEach(r=>r()));return SAVING}
 function saved(st){const el=$('#svd');if(!el)return;const t=new Date().toTimeString().slice(0,5);el.textContent=st==='err'?'⚠ تعذر الحفظ الكامل — المساحة ممتلئة (الكلام محفوظ، الصور ممكن لأ)':st==='ls'?'اتحفظ ✓ الساعة '+t+' (على الموبايل — من غير الصور)':'اتحفظ ✓ الساعة '+t;el.style.color=st==='err'?'#fecaca':'#cfe8c4'}
 function lsDrafts(){const out=[];try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith(DK+':')){try{out.push(JSON.parse(localStorage.getItem(k)))}catch(x){}}}}catch(x){}return out}
-async function allDrafts(){if(!DB)return lsDrafts();const ks=await tx('kv','readonly',st=>st.getAllKeys());const out=[];for(const k of ks.filter(k=>String(k).startsWith('d:'))){try{out.push(JSON.parse(await tx('kv','readonly',st=>st.get(k))))}catch(x){}}return out}
-async function dropDraft(id){try{localStorage.removeItem(DK+':'+id)}catch(x){}if(DB)await tx('kv','readwrite',st=>st.delete('d:'+id))}
-async function openDraft(id){await saveDraft(1);let v=DB?await tx('kv','readonly',st=>st.get('d:'+id)):null;if(!v)v=localStorage.getItem(DK+':'+id);if(v){D=fixD(JSON.parse(v));localStorage.setItem('alola_qc_cur',D.id);T=1;tab(1);scrollTo(0,0)}}
+async function allDrafts(){let ks;try{ks=await tx('kv','readonly',st=>st.getAllKeys())}catch(x){return lsDrafts()}const out=[];for(const k of ks.filter(k=>String(k).startsWith('d:'))){try{out.push(JSON.parse(await tx('kv','readonly',st=>st.get(k))))}catch(x){}}const ids=new Set(out.map(d=>d&&d.id));lsDrafts().forEach(d=>{if(d&&!ids.has(d.id))out.push(d)});return out}
+async function dropDraft(id){try{localStorage.removeItem(DK+':'+id)}catch(x){}await txs('kv','readwrite',st=>st.delete('d:'+id))}
+async function openDraft(id){await saveDraft(1);let v=await txs('kv','readonly',st=>st.get('d:'+id),null);if(!v)v=localStorage.getItem(DK+':'+id);if(v){D=fixD(JSON.parse(v));localStorage.setItem('alola_qc_cur',D.id);T=1;tab(1);scrollTo(0,0)}}
 async function delDraft(id){if(!confirm('تمسح المسودة دي نهائياً؟'))return;await dropDraft(id);if(D.id===id){D=blank(D);await saveDraft(1)}render()}
 function fixD(d){d.step=+d.step||0;if(!d.id)d.id='D'+Date.now().toString(36);if(d.tol&&d.tol['تانية']!=null&&d.tol['ثانية']==null){d.tol['ثانية']=d.tol['تانية'];delete d.tol['تانية']}d.rows.forEach(r=>{r.g=QC.normGrade(r.g);if(!r.pk)r.pk='كرتون';r.phD=r.phD||[];r.phW=r.phW||[];r.ph=r.ph||[];r.c=QC.normCtype(r.c);r.rots.forEach(x=>x.ph=x.ph||[])});return d}
 async function banner(){const el=$('#bnr');if(!el)return;const L=(await allDrafts()).filter(d=>d.id!==D.id&&hasData(d)).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
  el.innerHTML=(window._restored?`<div class="note" style="margin-bottom:8px">📝 <b>مسودة غير مكتملة</b> — اتسترجعت تلقائياً (آخر حفظ ${e((D.updatedAt||'').slice(11,16))}). كمّل من مكان ما وقفت.</div>`:'')+(L.length?`<div class="note" style="margin-bottom:8px">📝 <b>مسودات غير مكتملة (${L.length})</b>${L.map(d=>`<div class="it"><b>${e(d.date)} ${e(d.exp||'')} — ${d.rows.filter(r=>r.n).length} كرتونة<small>آخر حفظ ${e((d.updatedAt||'').replace('T',' ').slice(0,16))}</small></b><button class="btn s" onclick="openDraft('${d.id}')">كمّل</button><button class="btn r s" onclick="delDraft('${d.id}')">×</button></div>`).join('')}</div>`:'')}
-const bgSave=()=>{if(D){saveLS();flushDraft()}};document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')bgSave()});window.addEventListener('pagehide',bgSave);window.addEventListener('beforeunload',bgSave);document.addEventListener('freeze',bgSave);window.addEventListener('blur',bgSave);
+const bgSave=()=>{if(D){saveLS();flushDraft()}};document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')getDB()});document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')bgSave()});window.addEventListener('pagehide',bgSave);window.addEventListener('beforeunload',bgSave);document.addEventListener('freeze',bgSave);window.addEventListener('blur',bgSave);
 /* ask Safari to keep this app's storage (also on the first tap — some browsers only grant it after a user gesture) */
 const askKeep=()=>{try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{})}catch(x){}};document.addEventListener('pointerdown',askKeep,{once:true});
-const allReports=()=>DB?tx('reports','readonly',s=>s.getAll()):Promise.resolve([]);
+async function allReports(){const a=await txs('reports','readonly',s=>s.getAll(),[]),seen=new Set(a.map(x=>x.code));[...MEMR.values(),...lsReports()].forEach(f=>{if(f&&f.code&&!seen.has(f.code)){seen.add(f.code);a.push(f)}});return a}
 // ---------- UI ----------
 function tab(n){T=n;[1,2,3].forEach(i=>$('#t'+i).classList.toggle('on',i===n));$('#foot').style.display=n===1?'flex':'none';render()}
 const opt=(k,v)=>{const L=k==='carton'?LST(k):QC.L[k];return '<option value=""></option>'+L.map(o=>`<option${o===v?' selected':''}>${e(o)}</option>`).join('')+(v&&!L.includes(v)?`<option selected>${e(v)}</option>`:'')+(k==='carton'?'<option value="+">+ نوع كرتون جديد…</option>':'')};
@@ -124,7 +143,7 @@ async function sha(buf){return [...new Uint8Array(await crypto.subtle.digest('SH
 async function issue(){const rows=QC.used(D);if(!rows.length)return alert('مفيش ولا كرتونة متسجلة');const ms=QC.missing({rows});if(ms.length)return alert('مينفعش يطلع التقرير قبل ما تكمّل:\n\n'+ms.join('\n'));const dv=QC.diversity({rows});if(dv.length&&!confirm('تنبيه:\n'+dv.join('\n')+'\n\nتكمّل وتطلع التقرير؟'))return;
  busy('جاري عمل التقرير PDF…');try{const rep=JSON.parse(JSON.stringify(D));delete rep.step;rep.code=QC.code(new Date(),rep.date);rep.createdAt=new Date().toISOString();rep.rows=QC.used(rep);rep.rows.forEach(r=>{if(r.b&&!QC.L.brand.includes(r.b)&&!XL.brand.includes(r.b))XL.brand.push(r.b)});saveXL();
   const pdf=await makePdf(rep);const file={fmt:QC.FMT,v:QC.VER,app:'alola-quality-pwa',code:rep.code,createdAt:rep.createdAt,report:rep,pdf:b64(pdf),pdfSha256:await sha(pdf)};
-  await tx('reports','readwrite',s=>s.put(file));const oldId=D.id;D=blank(D);await saveDraft(1);await dropDraft(oldId);window._restored=false;busy('');T=1;render();showDone(file);share(file,'both')}catch(x){busy('');alert('حصلت مشكلة: '+x.message)}}
+  const where=await putReport(file);window._repStore=where;const oldId=D.id;D=blank(D);await saveDraft(1);await dropDraft(oldId);window._restored=false;busy('');T=1;render();showDone(file,where);share(file,'both')}catch(x){busy('');alert('حصلت مشكلة: '+(x&&x.message||x))}}
 const names=f=>({pdf:`تقرير جودة العلا — ${f.code}.pdf`,json:`${f.code}.alola-qc.json`});
 function files(f,what){const n=names(f),o=[];if(what!=='json')o.push(new File([unb64(f.pdf)],n.pdf,{type:'application/pdf'}));if(what!=='pdf')o.push(new File([JSON.stringify(f)],n.json,{type:'application/json'}));return o}
 /* PDF: in-app preview first (PdfShare) — the WhatsApp/share tap happens inside the preview; nothing is auto-downloaded. */
@@ -132,17 +151,17 @@ function share(f,what){const fl=files(f,what);const pdf=fl.find(x=>x.type==='app
  if(pdf){PdfShare.open(pdf,pdf.name,{title:'تقرير الجودة '+f.report.date,heading:'معاينة تقرير الجودة',extra:fl.filter(x=>x!==pdf),note:what==='both'?'هيتبعت معاه ملف البيانات ('+names(f).json+') لبرنامج الماك.':''});return}
  try{if(navigator.canShare&&navigator.canShare({files:fl})){navigator.share({files:fl,title:'بيانات تقرير الجودة '+f.code}).catch(()=>{});return}}catch(x){}
  fl.forEach((x,k)=>setTimeout(()=>{const a=document.createElement('a');a.href=URL.createObjectURL(x);a.download=x.name;document.body.appendChild(a);a.click();setTimeout(()=>a.remove(),1000)},k*600))}
-async function shareCode(code,what){const f=await tx('reports','readonly',s=>s.get(code));if(f)share(f,what)}
-async function delRep(code){if(!confirm('تحذف التقرير ده من الموبايل؟'))return;await tx('reports','readwrite',s=>s.delete(code));render()}
-function showDone(f){const d=$('#done');window._F=f;d.style.display='flex';d.innerHTML=`<div class="card"><h3>✔ التقرير اتعمل</h3><div class="note">الكود: <b dir="ltr">${e(f.code)}</b><br>⏱ <b>الفحص القادم: ${QC.hm(QC.next(f.report||{code:f.code}))}</b> (كل ${QC.EVERY} دقيقة — 4 كراتين بمقاسات مختلفة)<br>ابعت الملفين للمالك على واتساب أو الإيميل: <b>PDF</b> للقراءة، و<b>ملف البيانات</b> عشان يتضاف لبرنامج الماك.</div>
+async function shareCode(code,what){const f=await getReport(code);if(f)share(f,what)}
+async function delRep(code){if(!confirm('تحذف التقرير ده من الموبايل؟'))return;await delReport(code);render()}
+function showDone(f,where){const d=$('#done');window._F=f;d.style.display='flex';d.innerHTML=`<div class="card"><h3>✔ التقرير اتعمل</h3>${where==='mem'?'<div class="cwarn">⚠ الموبايل مش بيسمح بالتخزين دلوقتي — ابعت الملفين حالاً قبل ما تقفل البرنامج</div>':''}<div class="note">الكود: <b dir="ltr">${e(f.code)}</b><br>⏱ <b>الفحص القادم: ${QC.hm(QC.next(f.report||{code:f.code}))}</b> (كل ${QC.EVERY} دقيقة — 4 كراتين بمقاسات مختلفة)<br>ابعت الملفين للمالك على واتساب أو الإيميل: <b>PDF</b> للقراءة، و<b>ملف البيانات</b> عشان يتضاف لبرنامج الماك.</div>
 <button class="btn o" style="margin-top:10px" onclick="share(_F,'both')">👁 معاينة وإرسال الملفين (واتساب)</button><div class="g2" style="margin-top:8px"><button class="btn" onclick="share(_F,'pdf')">PDF بس (معاينة)</button><button class="btn" onclick="share(_F,'json')">ملف البيانات بس</button></div><button class="btn g" style="margin-top:8px" onclick="$('#done').style.display='none'">إغلاق</button></div>`}
 // ---------- boot ----------
 (async()=>{let light=null;try{light=JSON.parse(localStorage.getItem(DK))}catch(x){}
- try{DB=await idb();const cur=localStorage.getItem('alola_qc_cur');let v=cur?await tx('kv','readonly',st=>st.get('d:'+cur)):null;
+ try{await getDB();const cur=localStorage.getItem('alola_qc_cur');let v=cur?await txs('kv','readonly',st=>st.get('d:'+cur),null):null;
   if(!v&&cur){const l=localStorage.getItem(DK+':'+cur)||(light&&light.id===cur?JSON.stringify(light):null);if(l)v=l}
-  if(!v){const old=await tx('kv','readonly',st=>st.get('draft'));if(old)v=old}
+  if(!v){const old=await txs('kv','readonly',st=>st.get('draft'),null);if(old)v=old}
   if(!v){const L=(await allDrafts()).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));if(L[0])v=JSON.stringify(L[0])}
-  if(v){D=JSON.parse(v);if(light&&light.id===D.id&&(light.updatedAt||'')>(D.updatedAt||'')){/* text newer in LS: merge text, keep photos */const ph=D.rows;D={...light,rows:light.rows.map((r,i)=>({...r,ph:(ph[i]||{}).ph||[],phD:(ph[i]||{}).phD||[],phW:(ph[i]||{}).phW||[],rots:r.rots.map((x,j)=>({...x,ph:(((ph[i]||{}).rots||[])[j]||{}).ph||[]}))}))}}}
-  const xv=await tx('kv','readonly',st=>st.get('extra'));if(xv&&!localStorage.getItem(XK)){XL=JSON.parse(xv);XL.rots=(XL.rots||[]).map(x=>typeof x==='string'?x:x.k)}}catch(x){DB=null}
- if(!D&&light)D=light;if(!D||!D.rows)D=blank();fixD(D);window._restored=hasData(D);await saveDraft(1);render();
+  if(v){try{D=JSON.parse(v)}catch(x){D=null}}if(D){if(light&&light.id===D.id&&(light.updatedAt||'')>(D.updatedAt||'')){/* text newer in LS: merge text, keep photos */const ph=D.rows;D={...light,rows:light.rows.map((r,i)=>({...r,ph:(ph[i]||{}).ph||[],phD:(ph[i]||{}).phD||[],phW:(ph[i]||{}).phW||[],rots:r.rots.map((x,j)=>({...x,ph:(((ph[i]||{}).rots||[])[j]||{}).ph||[]}))}))}}}
+  const xv=await txs('kv','readonly',st=>st.get('extra'),null);if(xv&&!localStorage.getItem(XK)){XL=JSON.parse(xv);XL.rots=(XL.rots||[]).map(x=>typeof x==='string'?x:x.k)}}catch(x){}
+ if(!D&&light)D=light;if(!D||!D.rows)D=blank();fixD(D);window._restored=hasData(D);await saveDraft(1);render();migrateReports().catch(()=>{});
  if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('sw.js').catch(()=>{});if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{})})();

@@ -12,7 +12,7 @@ const PACKS=[
  {id:'closed7',g:'orange',label:'كرتون مقفول 7 ك',carton:'مقفول صغير 7 ك',pk:'كرتون',kg:7,sizes:[36,42,48]},
  {id:'c14',g:'orange',label:'كرتون مقفول 14 ك',carton:'مقفول 14 ك',pk:'كرتون',kg:14,sizes:OR15},
  {id:'c15',g:'orange',label:'كرتون مقفول 15 ك',carton:'مقفول 15 ك',pk:'كرتون',kg:15,sizes:OR15},
- {id:'jumbo',g:'orange',label:'صندوق بلاستيك جامبو',carton:'جامبو بلاستيك',pk:'صندوق بلاستيك',kg:0,sizes:OR15},
+ {id:'jumbo',g:'orange',label:'جامبو بلاستيك 15 ك',carton:'جامبو بلاستيك 15 ك',pk:'صندوق بلاستيك',kg:0,sizes:OR15},
  {id:'l14',g:'lemon',label:'كرتون 14 ك',carton:'مقفول 14 ك',pk:'كرتون',kg:14,sizes:LEM},
  {id:'l15',g:'lemon',label:'كرتون 15 ك',carton:'مقفول 15 ك',pk:'كرتون',kg:15,sizes:LEM},
  {id:'m2',g:'mand',label:'صندوق بلاستيك 2 ك',carton:'صندوق 2 ك',pk:'صندوق بلاستيك',kg:2,free:true},
